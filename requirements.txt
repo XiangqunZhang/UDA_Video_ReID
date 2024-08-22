@@ -1,0 +1,12 @@
+faiss_gpu==1.7.2
+h5py
+matplotlib
+numpy
+opencv_python
+Pillow
+scikit_learn==1.0.2
+scipy==1.7.3
+tensorboardX
+torch==1.8.1+cu101
+torchvision==0.9.1+cu101
+tqdm

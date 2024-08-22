@@ -24,13 +24,15 @@ from utils.utils import AverageMeter, Logger, save_checkpoint, print_time
 from utils.eval_metrics import evaluate,evaluate_with_clothes
 from utils.samplers import RandomIdentitySampler,RandomIdentitySampler_vccvid
 from utils import data_manager
-from utils.video_loader import ImageDataset, VideoDataset, VideoDatasetInfer, VideoDataset1, VideoDatasetInfer1
+from utils.video_loader import ImageDataset, VideoDataset, VideoDatasetcc
 
 parser = argparse.ArgumentParser(description='Train video model')
 # Datasets
-parser.add_argument('--root', type=str, default='/HDD3/zxq')
-parser.add_argument('-d', '--dataset', type=str, default='vccvid',
+parser.add_argument('-d', '--dataset', type=str, default='v3dgait',
                     choices=data_manager.get_names())
+parser.add_argument('--root', type=str, default='/HDD3/zxq')
+parser.add_argument('--td', type=str, default='ccvid') #目标域数据集
+parser.add_argument('--tdroot', type=str, default='/HDD3/zxq/') #目标域数据集地址
 parser.add_argument('-j', '--workers', default=4, type=int,
                     help="number of data loading workers (default: 4)")
 parser.add_argument('--height', type=int, default=256,
@@ -126,18 +128,15 @@ def main():
     else:
         print("Currently using CPU (GPU is highly recommended)")
 
-
-    print_time("Initializing dataset {}".format(args.dataset))
+    print_time("Initializing source dataset {}".format(args.dataset))
     dataset = data_manager.init_dataset(name=args.dataset, root=args.root)
-    # dataset = data_manager.init_dataset(name=args.dataset)
+    print_time("Initializing target dataset {}".format(args.td))
+    t_dataset = data_manager.init_dataset(name=args.td, root=args.tdroot)
 
     # print_time("Initializing dataset {}".format('ilidsvid'))
     # t_dataset = data_manager.init_dataset(name='mars', root="/HDD3/zxq/MARS/single/")
     # t_dataset = data_manager.init_dataset(name='ilidsvid', root="/HDD3/zxq/")
-    t_dataset = data_manager.init_dataset(name='lsvid', root="/HDD3/zxq/LS-VID/LS-VID")
 
-    # t_dataset2 = data_manager.init_dataset(name='prid')
-    # t_dataset2 = data_manager.init_dataset(name='ccvid', root="/HDD3/zxq/CCVID")
 
     # Data augmentation
     spatial_transform_train = ST.Compose([
@@ -161,119 +160,47 @@ def main():
 
     pin_memory = True if use_gpu else False
 
-    '''
-    trainloader = DataLoader(
-        ImageDataset(
-            dataset_train,
-            spatial_transform=spatial_transform_train,
-            temporal_transform=temporal_transform_train),
-        sampler=RandomIdentitySampler_vccvid(dataset.train, num_instances=args.num_instances),
-        # sampler = RandomIdentitySampler(dataset.train,num_instances=args.num_instances),
-        batch_size=args.train_batch, num_workers=args.workers,
-        pin_memory=pin_memory, drop_last=True,)
+    def get_train_dataloader(dataset_name, dataset_train):
+        if dataset_name in ['v3dgait','ccvid','rvccvid']: #cc reid
+            dataset = VideoDatasetcc(dataset_train, spatial_transform=spatial_transform_train, temporal_transform=temporal_transform_train)
+            sampler=RandomIdentitySampler_vccvid(dataset_train, num_instances=args.num_instances)
+        else:
+            dataset = VideoDataset(dataset_train, spatial_transform=spatial_transform_train, temporal_transform=temporal_transform_train)
+            sampler=RandomIdentitySampler(dataset_train, num_instances=args.num_instances)
 
-    queryloader_sampled_frames = DataLoader(
-        ImageDataset(dataset_query, spatial_transform=spatial_transform_test, temporal_transform=temporal_transform_test),
-        batch_size=args.test_batch, shuffle=False, num_workers=args.workers,
-        pin_memory=pin_memory, drop_last=False)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.train_batch,
+            sampler=sampler,
+            num_workers=args.workers,
+            pin_memory=pin_memory,
+            drop_last=True
+        )
 
-    galleryloader_sampled_frames = DataLoader(
-        ImageDataset(dataset_gallery, spatial_transform=spatial_transform_test, temporal_transform=temporal_transform_test),
-        batch_size=args.test_batch, shuffle=False, num_workers=args.workers,
-        pin_memory=pin_memory, drop_last=False)
-    #biaoji
-    queryloader_all_frames = DataLoader(
-        VideoDatasetInfer(
-            dataset_query, spatial_transform=spatial_transform_test, seq_len=args.seq_len),
-        batch_size=1, shuffle=False, num_workers=args.workers,
-        pin_memory=pin_memory, drop_last=False)
+        return dataloader
 
-    galleryloader_all_frames = DataLoader(
-        VideoDatasetInfer(dataset_gallery, spatial_transform=spatial_transform_test, seq_len=args.seq_len),
-        batch_size=1, shuffle=False, num_workers=args.workers,
-        pin_memory=pin_memory, drop_last=False)
-    '''
+    def get_qg_dataloader(dataset_name, dataset_qg):
+        if dataset_name in ['v3dgait','ccvid','rvccvid', 'svreid_cc']: #cc reid
+            dataset = VideoDatasetcc(dataset_qg, spatial_transform=spatial_transform_test, temporal_transform=temporal_transform_test)
+        else:
+            dataset = VideoDataset(dataset_qg, spatial_transform=spatial_transform_test, temporal_transform=temporal_transform_test)
 
 
-    # trainloader = DataLoader(
-    #     VideoDataset(
-    #         dataset_train,
-    #         spatial_transform=spatial_transform_train,
-    #         temporal_transform=temporal_transform_train),
-    #     # sampler=RandomIdentitySampler(dataset.train, num_instances=args.num_instances),
-    #     sampler=RandomIdentitySampler_vccvid(dataset.train, num_instances=args.num_instances),
-    #     batch_size=args.train_batch, num_workers=args.workers,
-    #     pin_memory=pin_memory, drop_last=True, )
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.train_batch,
+            num_workers=args.workers,
+            pin_memory=pin_memory,
+            shuffle=False,
+            drop_last=False
+        )
 
-    trainloader = DataLoader(
-        VideoDataset(
-        # VideoDataset(
-            dataset_train,
-            spatial_transform=spatial_transform_train,
-            temporal_transform=temporal_transform_train),
-        sampler=RandomIdentitySampler_vccvid(dataset.train, num_instances=args.num_instances),
-        # sampler=RandomIdentitySampler(dataset.train, num_instances=args.num_instances),
-        batch_size=args.train_batch, num_workers=args.workers,
-        pin_memory=pin_memory, drop_last=True, )
+        return dataloader
 
-    # t_trainloader = DataLoader(
-    #     VideoDataset1(
-    #         t_dataset.train,
-    #         spatial_transform=spatial_transform_train,
-    #         temporal_transform=temporal_transform_train),
-    #     sampler=RandomIdentitySampler(t_dataset.train, num_instances=args.num_instances),
-    #     # sampler=RandomIdentitySampler(dataset.train, num_instances=args.num_instances),
-    #     batch_size=args.train_batch, num_workers=args.workers,
-    #     pin_memory=pin_memory, drop_last=True, )
-
-    # queryloader_sampled_frames = DataLoader(
-    #     VideoDataset(dataset_query, spatial_transform=spatial_transform_test,
-    #                  temporal_transform=temporal_transform_test),
-    #     batch_size=args.test_batch, shuffle=False, num_workers=args.workers,
-    #     pin_memory=pin_memory, drop_last=False)
-    #
-    # galleryloader_sampled_frames = DataLoader(
-    #     VideoDataset(dataset_gallery, spatial_transform=spatial_transform_test,
-    #                  temporal_transform=temporal_transform_test),
-    #     batch_size=args.test_batch, shuffle=False, num_workers=args.workers,
-    #     pin_memory=pin_memory, drop_last=False)
-    # biaoji
-
-    t_queryloader = DataLoader(
-        VideoDataset1(t_dataset.query, spatial_transform=spatial_transform_test,
-                      temporal_transform=temporal_transform_test),
-        batch_size=args.test_batch, shuffle=False, num_workers=args.workers,
-        pin_memory=pin_memory, drop_last=False)
-
-    t_galleryloader = DataLoader(
-        VideoDataset1(t_dataset.gallery, spatial_transform=spatial_transform_test,
-                      temporal_transform=temporal_transform_test),
-        batch_size=args.test_batch, shuffle=False, num_workers=args.workers,
-        pin_memory=pin_memory, drop_last=False)
-
-    # t_queryloader2 = DataLoader(
-    #     VideoDataset(t_dataset2.query, spatial_transform=spatial_transform_test,
-    #                   temporal_transform=temporal_transform_test),
-    #     batch_size=args.test_batch, shuffle=False, num_workers=args.workers,
-    #     pin_memory=pin_memory, drop_last=False)
-    #
-    # t_galleryloader2 = DataLoader(
-    #     VideoDataset(t_dataset2.gallery, spatial_transform=spatial_transform_test,
-    #                   temporal_transform=temporal_transform_test),
-    #     batch_size=args.test_batch, shuffle=False, num_workers=args.workers,
-    #     pin_memory=pin_memory, drop_last=False)
-
-    # queryloader_all_frames = DataLoader(
-    #     VideoDatasetInfer(
-    #         dataset_query, spatial_transform=spatial_transform_test, seq_len=args.seq_len),
-    #     batch_size=1, shuffle=False, num_workers=args.workers,
-    #     pin_memory=pin_memory, drop_last=False)
-    #
-    # galleryloader_all_frames = DataLoader(
-    #     VideoDatasetInfer(dataset_gallery, spatial_transform=spatial_transform_test, seq_len=args.seq_len),
-    #     batch_size=1, shuffle=False, num_workers=args.workers,
-    #     pin_memory=pin_memory, drop_last=False)
-
+    trainloader = get_train_dataloader(args.dataset, dataset_train)
+    t_trainloader = get_train_dataloader(args.td, t_dataset.train)
+    t_queryloader = get_qg_dataloader(args.td, t_dataset.query)
+    t_galleryloader = get_qg_dataloader(args.td, t_dataset.gallery)
 
     print_time("Initializing model: {}".format(args.arch))
     model = init_model(
@@ -308,18 +235,14 @@ def main():
         # print(model)
         print_time("Loading checkpoint from '{}'".format(args.resume))
         checkpoint = torch.load(args.resume)
-        # 改动fc层
+        # fc
         # print(checkpoint['state_dict'].keys())
         # state_dict_1 = {k: v for k, v in checkpoint['state_dict'].items() if (k != 'classifier.weight' and k!= 'classifier.bias')}
         # print(state_dict_1.keys())
         #
         # model.load_state_dict(state_dict_1,strict=False)
 
-
-        # print(model)
-
-
-        # 注上解下
+        #
         model.load_state_dict(checkpoint['state_dict'])
         start_epoch = checkpoint['epoch']
 
@@ -328,12 +251,8 @@ def main():
 
     if args.evaluate:
         with torch.no_grad():
-            if args.all_frames:
-                print_time('==> Evaluate with [all] frames!')
-                test1(model, queryloader_all_frames, galleryloader_all_frames, use_gpu)
-            else:
-                print_time('==> Evaluate with sampled [{}] frames per video!'.format(args.seq_len))
-                test1(model, queryloader_sampled_frames, galleryloader_sampled_frames, use_gpu)
+            print_time('==> Evaluate with all frames!')
+            test(model, t_queryloader, t_galleryloader, use_gpu)
         return
 
     start_time = time.time()
@@ -346,25 +265,15 @@ def main():
         start_train_time = time.time()
 
         # rank1 = test(model, t_queryloader, t_galleryloader, use_gpu)
-        # rank000 = test1(model, t_queryloader2, t_galleryloader2, use_gpu)
-
 
         train(epoch, model, criterions, optimizer, trainloader, use_gpu)
-        # rank1 = test(model, t_queryloader, t_galleryloader, use_gpu)
-        # train1(epoch, model, criterions, optimizer, trainloader, use_gpu)
-
-
         train_time += round(time.time() - start_train_time)
         scheduler.step()
 
         if (epoch+1) >= args.start_eval and args.eval_step > 0 and (epoch+1) % args.eval_step == 0 or (epoch+1) == args.max_epoch:
             print_time("==> Test")
             with torch.no_grad():
-                 # rank000 = test1(model, queryloader_sampled_frames, galleryloader_sampled_frames, use_gpu)
-                # rank000 = test(model, queryloader_sampled_frames, galleryloader_sampled_frames, use_gpu)
-                # rank1 = test_mars(model, t_queryloader, t_galleryloader, use_gpu)
                 rank1 = test(model, t_queryloader, t_galleryloader, use_gpu)
-                # rank000 = test1(model, t_queryloader2, t_galleryloader2, use_gpu)
 
             is_best = rank1 > best_rank1
             if is_best: 
@@ -401,7 +310,7 @@ def main():
         print_time('==> Evaluate with all frames!')
         print_time("Loading checkpoint from '{}'".format(best_checkpoint_path))
         with torch.no_grad():
-            test1(model, queryloader_all_frames, galleryloader_all_frames, use_gpu)
+            test1(model, t_queryloader, t_galleryloader, use_gpu)
         return
 
 def train_c(epoch, model, criterions, optimizer, trainloader, use_gpu):
@@ -519,14 +428,8 @@ def train1(epoch, model, criterions, optimizer, trainloader, use_gpu):
         optimizer.zero_grad()
         # print("+++++++++++++")
         if 'infonce' in args.losses:
-            # print("+++++++++++++")
             y, f, x, _ = model(vids)
-            # from fvcore.nn import FlopCountAnalysis, parameter_count_table, flop_count_table
-            # flops = FlopCountAnalysis(model, vids)
-            # print("FLOPs: ", flops.total())
-            # print(flop_count_table(FlopCountAnalysis(model, vids)))
 
-            # print(parameter_count_table(model))
             # combine hard triplet loss with cross entropy loss
             xent_loss = criterions['xent'](y, pids)
             htri_loss = criterions['htri'](f, pids)
@@ -603,14 +506,7 @@ def train(epoch, model, criterions, optimizer, trainloader, use_gpu):
         optimizer.zero_grad()
         # print("+++++++++++++")
         if 'infonce' in args.losses:
-            # print("+++++++++++++")
             y, f, x, _ = model(vids)
-            # from fvcore.nn import FlopCountAnalysis, parameter_count_table, flop_count_table
-            # flops = FlopCountAnalysis(model, vids)
-            # print("FLOPs: ", flops.total())
-            # print(flop_count_table(FlopCountAnalysis(model, vids)))
-
-            # print(parameter_count_table(model))
             # combine hard triplet loss with cross entropy loss
             xent_loss = criterions['xent'](y, pids)
             htri_loss = criterions['htri'](f, pids)
@@ -870,25 +766,6 @@ def test1(model, queryloader, galleryloader, use_gpu, ranks=[1, 5, 10, 20]):
         feat_func,
         use_gpu=use_gpu)
     print_time("Extracted features for gallery set, obtained {} matrix".format(gf.shape))
-
-    # print(q_camids)
-    # print(g_camids)
-    #
-    # PATH1 = 'extract_features_rvccvid/query/'
-    # PATH2 = 'extract_features_rvccvid/gallery/'
-    # np.save('{}qf.npy'.format(PATH1),qf.cpu().numpy())
-    # np.save('{}q_pids.npy'.format(PATH1),q_pids)
-    # np.save('{}q_camids.npy'.format(PATH1),q_camids)
-    # np.save('{}q_clothes_ids.npy'.format(PATH1),q_clothes_ids)
-    #
-    #
-    # np.save('{}gf.npy'.format(PATH2), gf.cpu().numpy())
-    # np.save('{}g_pids.npy'.format(PATH2), g_pids)
-    # np.save('{}g_camids.npy'.format(PATH2), g_camids)
-    # np.save('{}g_clothes_ids.npy'.format(PATH2), g_clothes_ids)
-
-
-
 
     time_elapsed = time.time() - since
     print_time('Extracting features complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))

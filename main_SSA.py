@@ -10,12 +10,9 @@ import faiss
 import numpy as np
 import os.path as osp
 
-from sklearn.cluster import DBSCAN, KMeans
 from tqdm import tqdm
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
@@ -23,36 +20,30 @@ from torch.utils.data import DataLoader
 import transforms.spatial_transforms as ST
 import transforms.temporal_transforms as TT
 from models import init_model
-from models.vidDA_model import attn_para, MultiStageModel, attn_para00
+from models.vidDA_model import attn_para, MultiStageModel
 from utils.losses import TripletLoss, InfoNce
-# from utils.sstda_train_newcluloss import Trainer
 from utils.vidDA_train import Trainer
 from utils.utils import AverageMeter, Logger, save_checkpoint, print_time
 from utils.eval_metrics import evaluate,evaluate_with_clothes
 from utils.samplers import RandomIdentitySampler,RandomIdentitySampler_vccvid
 from utils import data_manager, ramps
-from utils.video_loader import ImageDataset, VideoDataset, VideoDatasetInfer, VideoDataset2, VideoDataset1, \
-    VideoDatasetInfer1, Preprocessor_videoDataset1
+from utils.video_loader import ImageDataset, VideoDataset, VideoDatasetcc
 
-from utils.faiss_rerank import compute_jaccard_distance
 import torch.nn.functional as F
 from torch import nn, autograd
 
-import collections
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
-bbbbb_ssssize = 32
-eeeepoch = 150
+bbbbb_ssssize = 32   #batch size
+eeeepoch = 150 # epoch
 
 parser = argparse.ArgumentParser(description='Train video model')
 # Datasets
-parser.add_argument('--root', type=str, default='/HDD3/zxq')
-# parser.add_argument('--td', type=str, default='ilidsvid')
-parser.add_argument('--td', type=str, default='ccvid')
 parser.add_argument('-d', '--dataset', type=str, default='v3dgait',
                     choices=data_manager.get_names())
+parser.add_argument('--root', type=str, default='/HDD3/zxq')
+parser.add_argument('--td', type=str, default='ccvid') #目标域数据集
+parser.add_argument('--tdroot', type=str, default='/HDD3/zxq/') #目标域数据集地址
 parser.add_argument('-j', '--workers', default=4, type=int,
                     help="number of data loading workers (default: 4)")
 parser.add_argument('--height', type=int, default=256,
@@ -215,50 +206,22 @@ def main():
         print("Currently using GPU {}".format(args.gpu_devices))
         cudnn.benchmark = True
         torch.manual_seed(args.seed)
-        torch.cuda.manual_seed(args.seed) 
+        torch.cuda.manual_seed(args.seed)
         torch.cuda.manual_seed_all(args.seed)
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
     else:
         print("Currently using CPU (GPU is highly recommended)")
 
-    def get_current_consistency_weight(epoch):
-        # Consistency ramp-up from https://arxiv.org/abs/1610.02242
-
-        #单任务暂时不用
-        consistency = 1
-        consistency_rampup = 7.0
-        return consistency * ramps.sigmoid_rampup(epoch, consistency_rampup)
-
-
-
-    print_time("Initializing dataset {}".format(args.dataset))
+    print_time("Initializing source dataset {}".format(args.dataset))
     dataset = data_manager.init_dataset(name=args.dataset, root=args.root)
-    print_time("Initializing dataset {}".format(args.td))
+    print_time("Initializing target dataset {}".format(args.td))
+    t_dataset = data_manager.init_dataset(name=args.td, root=args.tdroot)
+
     # t_dataset = data_manager.init_dataset(name=args.td, root="/HDD3/zxq/MARS/single/")
-    # t_dataset = data_manager.init_dataset(name=args.td, root="/HDD3/zxq/")
     # t_dataset = data_manager.init_dataset(name=args.td)
-    t_dataset = data_manager.init_dataset(name=args.td,root="/HDD3/zxq/CCVID")
+    # t_dataset = data_manager.init_dataset(name=args.td,root="/HDD3/zxq/CCVID")
     # t_dataset = data_manager.init_dataset(name=args.td,root="/HDD3/zxq/LS-VID/LS-VID")
-
-    def get_data(l=1, shuffle=False):
-
-
-        dataset = data_manager.init_dataset(name=args.td, root="/HDD3/zxq/")
-
-        label_dict = {}
-        for i, item_l in enumerate(dataset.train):
-            if shuffle:
-                labels = tuple([0 for i in range(l)])
-                dataset.train[i] = (item_l[0],) + labels + (item_l[-1],)
-            if item_l[1] in label_dict:
-                label_dict[item_l[1]].append(i)
-            else:
-                label_dict[item_l[1]] = [i]
-
-        return dataset, label_dict
-
-
 
     # Data augmentation
     spatial_transform_train = ST.Compose([
@@ -277,110 +240,54 @@ def main():
     temporal_transform_test = TT.TemporalRestrictedBeginCrop(size=args.seq_len)
 
     dataset_train = dataset.train
-    dataset_query = dataset.query
-    dataset_gallery = dataset.gallery
+    # dataset_query = dataset.query
+    # dataset_gallery = dataset.gallery
 
     pin_memory = True if use_gpu else False
 
+    def get_train_dataloader(dataset_name, dataset_train):
+        if dataset_name in ['v3dgait','ccvid','rvccvid','svreid_cc', 'svreid', 'svreid_plus']: #cc type_reid
+            dataset = VideoDatasetcc(dataset_train, spatial_transform=spatial_transform_train, temporal_transform=temporal_transform_train)
+            sampler=RandomIdentitySampler_vccvid(dataset_train, num_instances=args.num_instances)
+        else:
+            dataset = VideoDataset(dataset_train, spatial_transform=spatial_transform_train, temporal_transform=temporal_transform_train)
+            sampler=RandomIdentitySampler(dataset_train, num_instances=args.num_instances)
 
-    trainloader = DataLoader(
-        VideoDataset1(
-            dataset_train,
-            spatial_transform=spatial_transform_train,
-            temporal_transform=temporal_transform_train),
-        # sampler=RandomIdentitySampler_vccvid(dataset.train, num_instances=args.num_instances),
-        sampler=RandomIdentitySampler(dataset.train, num_instances=args.num_instances),
-        batch_size=args.train_batch, num_workers=args.workers,
-        pin_memory=pin_memory, drop_last=True, )
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.train_batch,
+            sampler=sampler,
+            num_workers=args.workers,
+            pin_memory=pin_memory,
+            drop_last=True
+        )
 
-    # t_trainloader = DataLoader(
-    #     VideoDataset1(
-    #         t_dataset.train,
-    #         spatial_transform=spatial_transform_train,
-    #         temporal_transform=temporal_transform_train),
-    #     sampler=RandomIdentitySampler(t_dataset.train, num_instances=args.num_instances),
-    #     # sampler=RandomIdentitySampler(dataset.train, num_instances=args.num_instances),
-    #     batch_size=args.train_batch, num_workers=args.workers,
-    #     pin_memory=pin_memory, drop_last=True, )
+        return dataloader
 
-    t_trainloader = DataLoader(
-        VideoDataset(
-            t_dataset.train,
-            spatial_transform=spatial_transform_train,
-            temporal_transform=temporal_transform_train),
-        # sampler=RandomIdentitySampler(t_dataset.train, num_instances=args.num_instances),
-        sampler=RandomIdentitySampler_vccvid(t_dataset.train, num_instances=args.num_instances),
-        batch_size=args.train_batch, num_workers=args.workers,
-        pin_memory=pin_memory, drop_last=True, )
-
-    # def get_test_loader(batch_size=args.train_batch, workers=args.workers, testset=None):
-    #
-    #     if testset is None:
-    #         testset = list(set(t_dataset.query) | set(t_dataset.gallery))
-    #     # print(testset)
-    #
-    #     test_loader = DataLoader(
-    #         Preprocessor_videoDataset1(testset, spatial_transform=spatial_transform_train,
-    #         temporal_transform=temporal_transform_train),
-    #         batch_size=batch_size, num_workers=workers,
-    #         shuffle=False, pin_memory=True ,drop_last=True,)
-    #
-    #     return test_loader
+    def get_qg_dataloader(dataset_name, dataset_qg):
+        if dataset_name in ['v3dgait','ccvid','rvccvid','svreid_cc', 'svreid', 'svreid_plus']:
+            dataset = VideoDatasetcc(dataset_qg, spatial_transform=spatial_transform_test, temporal_transform=temporal_transform_test)
+        else:
+            dataset = VideoDataset(dataset_qg, spatial_transform=spatial_transform_test, temporal_transform=temporal_transform_test)
 
 
-    # queryloader_sampled_frames = DataLoader(
-    #     VideoDataset1(dataset_query, spatial_transform=spatial_transform_test,
-    #                  temporal_transform=temporal_transform_test),
-    #     batch_size=args.test_batch, shuffle=False, num_workers=args.workers,
-    #     pin_memory=pin_memory, drop_last=False)
-    #
-    # galleryloader_sampled_frames = DataLoader(
-    #     VideoDataset1(dataset_gallery, spatial_transform=spatial_transform_test,
-    #                  temporal_transform=temporal_transform_test),
-    #     batch_size=args.test_batch, shuffle=False, num_workers=args.workers,
-    #     pin_memory=pin_memory, drop_last=False)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.train_batch,
+            num_workers=args.workers,
+            pin_memory=pin_memory,
+            shuffle=False,
+            drop_last=False
+        )
 
-    t_queryloader = DataLoader(
-        VideoDataset(t_dataset.query, spatial_transform=spatial_transform_test,
-                     temporal_transform=temporal_transform_test),
-        batch_size=args.test_batch, shuffle=False, num_workers=args.workers,
-        pin_memory=pin_memory, drop_last=False)
+        return dataloader
 
-    t_galleryloader = DataLoader(
-        VideoDataset(t_dataset.gallery, spatial_transform=spatial_transform_test,
-                     temporal_transform=temporal_transform_test),
-        batch_size=args.test_batch, shuffle=False, num_workers=args.workers,
-        pin_memory=pin_memory, drop_last=False)
+    trainloader = get_train_dataloader(args.dataset, dataset_train)
+    t_trainloader = get_train_dataloader(args.td, t_dataset.train)
+    t_queryloader = get_qg_dataloader(args.td, t_dataset.query)
+    t_galleryloader = get_qg_dataloader(args.td, t_dataset.gallery)
 
-    # biaoji
-    # queryloader_all_frames = DataLoader(
-    #     VideoDatasetInfer(
-    #         dataset_query, spatial_transform=spatial_transform_test, seq_len=args.seq_len),
-    #     batch_size=1, shuffle=False, num_workers=args.workers,
-    #     pin_memory=pin_memory, drop_last=False)
-    #
-    # galleryloader_all_frames = DataLoader(
-    #     VideoDatasetInfer(dataset_gallery, spatial_transform=spatial_transform_test, seq_len=args.seq_len),
-    #     batch_size=1, shuffle=False, num_workers=args.workers,
-    #     pin_memory=pin_memory, drop_last=False)
-
-    # t_queryloader_all_frames = DataLoader(
-    #     VideoDatasetInfer1(
-    #         dataset_query, spatial_transform=spatial_transform_test, seq_len=args.seq_len),
-    #     batch_size=1, shuffle=False, num_workers=args.workers,
-    #     pin_memory=pin_memory, drop_last=False)
-    #
-    # t_galleryloader_all_frames = DataLoader(
-    #     VideoDatasetInfer1(dataset_gallery, spatial_transform=spatial_transform_test, seq_len=args.seq_len),
-    #     batch_size=1, shuffle=False, num_workers=args.workers,
-    #     pin_memory=pin_memory, drop_last=False)
-
-
-
-
-
-
-    print_time("Initializing model: {}".format(args.arch))
+    print_time("Initializing video encoder")
     model = init_model(
                 name=args.arch,
                 num_classes = dataset.num_train_pids,
@@ -393,17 +300,16 @@ def main():
                 losses=args.losses,
                 seq_len=args.seq_len)
 
-
-
-
     attn_para_model = attn_para()
     # attn_para_model = attn_para00()
 
-    # SSA_model  不需要opti在这里
-    num_classes = dataset.num_train_pids  # 150 or 167
+    # SSA_model
+    source_num_classes = dataset.num_train_pids  # 150 or 167
+    target_num_classes = t_dataset.num_train_pids
+
     # initialize SSA_model & trainer
-    st_model = MultiStageModel(args, num_classes)
-    trainer = Trainer(num_classes)
+    st_model = MultiStageModel(args, source_num_classes)
+    trainer = Trainer(source_num_classes)
 
     print_time("Model Size w/o Classifier: {:.5f}M".format(
         sum(p.numel() for name, p in model.named_parameters() if 'classifier' not in name and 'projection' not in name)/1000000.0))
@@ -420,7 +326,6 @@ def main():
 
     if args.pretrain:
         print("Loading pre-trained params from '{}'".format(args.pretrain_model_path))
-        # pretrain_dict = torch.load(args.pretrain_model_path)
         pretrain_dict = torch.load(args.pretrain_model_path)['state_dict']
         model_dict = model.state_dict()
         state_dict_1 = {k: v for k, v in pretrain_dict.items() if (k != 'classifier.weight' and k!= 'classifier.bias')}
@@ -429,22 +334,13 @@ def main():
 
     if args.resume:
 
-        # print(model)
         print_time("Loading checkpoint from '{}'".format(args.resume))
         checkpoint = torch.load(args.resume)
-        # 改动fc层
-        print(checkpoint['state_dict'].keys())
-        state_dict_1 = {k: v for k, v in checkpoint['state_dict'].items() if (k != 'classifier.weight' and k!= 'classifier.bias')}
-        print(state_dict_1.keys())
+        # # fc层改动
+        # state_dict_1 = {k: v for k, v in checkpoint['state_dict'].items() if (k != 'classifier.weight' and k!= 'classifier.bias')}
+        # model.load_state_dict(state_dict_1,strict=False)
 
-        model.load_state_dict(state_dict_1,strict=False)
-
-
-        # print(model)
-
-
-        # 注上解下
-        # model.load_state_dict(checkpoint['state_dict'])
+        model.load_state_dict(checkpoint['state_dict'])
         start_epoch = checkpoint['epoch']
 
     if use_gpu:
@@ -459,17 +355,16 @@ def main():
         for param in ema_model.parameters():
             param.detach_()
 
-
         attn_para_model.cuda()
 
     if args.evaluate:
         with torch.no_grad():
-            if args.all_frames:
-                print_time('==> Evaluate with [all] frames!')
-                test(model, queryloader_all_frames, galleryloader_all_frames, use_gpu)
+            print_time('==> Evaluate with all frames!')
+            if args.td in ['ccvid', 'rvccvid', 'svreid_cc', 'svreid', 'svreid_plus']:
+                test_cc(model, t_queryloader, t_galleryloader, use_gpu)
             else:
-                print_time('==> Evaluate with sampled [{}] frames per video!'.format(args.seq_len))
-                test(model, queryloader_sampled_frames, galleryloader_sampled_frames, use_gpu)
+                test(model, t_queryloader, t_galleryloader, use_gpu)
+
         return
 
     start_time = time.time()
@@ -480,314 +375,17 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model_dir = "/home/xiangqun/usr/temp_dir/models"
-    results_dir = "/home/xiangqun/usr/temp_dir/results"
-
-    #DCC loss and online clustering
-
-    # class DCC(autograd.Function):
-    #     @staticmethod
-    #     def forward(ctx, inputs, targets, lut_ccc, lut_icc, momentum):
-    #         ctx.lut_ccc = lut_ccc
-    #         ctx.lut_icc = lut_icc
-    #         ctx.momentum = momentum
-    #         ctx.save_for_backward(inputs, targets)
-    #         outputs_ccc = inputs.mm(ctx.lut_ccc.t())
-    #         outputs_icc = inputs.mm(ctx.lut_icc.t())
-    #
-    #         return outputs_ccc, outputs_icc
-    #
-    #     @staticmethod
-    #     def backward(ctx, grad_outputs_ccc, grad_outputs_icc):
-    #         inputs, targets = ctx.saved_tensors
-    #         grad_inputs = None
-    #         if ctx.needs_input_grad[0]:
-    #             grad_inputs = grad_outputs_ccc.mm(ctx.lut_ccc) + grad_outputs_icc.mm(ctx.lut_icc)
-    #
-    #         batch_centers = collections.defaultdict(list)
-    #         for instance_feature, index in zip(inputs, targets.data.cpu().numpy()):
-    #             batch_centers[index].append(instance_feature)
-    #
-    #         for y, features in batch_centers.items():
-    #             mean_feature = torch.stack(batch_centers[y], dim=0)
-    #             non_mean_feature = mean_feature.mean(0)
-    #             x = F.normalize(non_mean_feature, dim=0)
-    #             ctx.lut_ccc[y] = ctx.momentum * ctx.lut_ccc[y] + (1. - ctx.momentum) * x
-    #             ctx.lut_ccc[y] /= ctx.lut_ccc[y].norm()
-    #
-    #         del batch_centers
-    #
-    #         for x, y in zip(inputs, targets.data.cpu().numpy()):
-    #             ctx.lut_icc[y] = ctx.lut_icc[y] * ctx.momentum + (1 - ctx.momentum) * x
-    #             ctx.lut_icc[y] /= ctx.lut_icc[y].norm()
-    #
-    #         return grad_inputs, None, None, None, None
-    #
-    # def oim(inputs, targets, lut_ccc, lut_icc, momentum=0.1):
-    #     return DCC.apply(inputs, targets, lut_ccc, lut_icc, torch.Tensor([momentum]).to(inputs.device))
-    #
-    # import copy
-    # class DCCLoss(nn.Module):
-    #     def __init__(self, num_features, num_classes, scalar=20.0, momentum=0.0,
-    #                  weight=None, size_average=True, init_feat=[]):
-    #         super(DCCLoss, self).__init__()
-    #         self.num_features = num_features
-    #         self.num_classes = num_classes
-    #         self.momentum = momentum
-    #         self.scalar = scalar
-    #         self.weight = weight
-    #         self.size_average = size_average
-    #
-    #         self.register_buffer('lut_ccc', torch.zeros(num_classes, num_features).cuda())
-    #         self.lut_ccc = copy.deepcopy(init_feat)
-    #
-    #         self.register_buffer('lut_icc', torch.zeros(num_classes, num_features).cuda())
-    #         self.lut_icc = copy.deepcopy(init_feat)
-    #
-    #         print('Weight:{},Momentum:{}'.format(self.weight, self.momentum))
-    #
-    #     def forward(self, inputs, targets):
-    #         inputs_ccc, inputs_icc = oim(inputs, targets, self.lut_ccc, self.lut_icc, momentum=self.momentum)
-    #
-    #         inputs_ccc *= self.scalar
-    #         inputs_icc *= self.scalar
-    #
-    #         loss_ccc = F.cross_entropy(inputs_ccc, targets, size_average=self.size_average)
-    #         loss_icc = F.cross_entropy(inputs_icc, targets, size_average=self.size_average)
-    #
-    #         loss_con = F.smooth_l1_loss(inputs_ccc, inputs_icc.detach(), reduction='elementwise_mean')
-    #         loss = loss_ccc + loss_icc + loss_con
-    #
-    #         return loss
-    #
-    # def print_cluster_acc(label_dict, target_label_tmp):
-    #     num_correct = 0
-    #     for pid in label_dict:
-    #         pid_index = np.asarray(label_dict[pid])
-    #         pred_label = np.argmax(np.bincount(target_label_tmp[pid_index]))
-    #         num_correct += (target_label_tmp[pid_index] == pred_label).astype(np.float32).sum()
-    #     cluster_accuracy = num_correct / len(target_label_tmp)
-    #     print(f'cluster accucary: {cluster_accuracy:.3f}')
-    #
-    # #end DCC
-    #
-    # # init cluster_loader
-    # bzbz = 300
-    # cluster_loader = get_test_loader(batch_size = bzbz,testset=sorted(t_dataset.train))
-    #
-    # # for batch_idx, (vids, pids, camid) in enumerate(cluster_loader):
-    # #     print("Inputs shape:", vids.shape)
-    # for i, (imgs, pids, _) in enumerate(cluster_loader):
-    #     pseudo_labels=pids.numpy()
-    #
-    #
-    # #
-    # # print(len(np.where(pseudo_labels != -1)[0]))
-    # # num_cluster = len(set(pseudo_labels)) - (1 if -1 in pseudo_labels else 0)
-    # # del cluster_loader
-    #
-    # # print(num_cluster)
-    # # print(pseudo_labels)
-    # # print(pseudo_labels.shape)
-    #
-    # #kmeans！
-    # # ncs = [40,80,120]
-    # #
-    # # prenc_i = -1
-    # #
-    # # target_features, _, _ = _feats_of_loader_nocc(
-    # #     model,
-    # #     cluster_loader,
-    # #     feat_func=extract_feat_sampled_frames_whentrain,
-    # #     use_gpu=use_gpu)
-    # # print_time("Extracted features for model set, obtained {} matrix".format(target_features.shape))
-    # #
-    # # moving_avg_features = target_features.numpy()
-    # # target_label = []
-    # #
-    # #
-    # #
-    # #
-    # # for nc_i in ncs:
-    # #     label_dict = {}
-    # #     for i, item_l in enumerate(t_dataset.train):
-    # #
-    # #         labels = tuple([0 for i in range(nc_i)])
-    # #         t_dataset.train[i] = (item_l[0],) + labels + (item_l[-1],)
-    # #         if item_l[1] in label_dict:
-    # #             label_dict[item_l[1]].append(i)
-    # #         else:
-    # #             label_dict[item_l[1]] = [i]
-    # #
-    # #
-    # #     plabel_path = os.path.join(args.logs_dir, 'target_label{}_{}.npy'.format(nc_i, args.cluster_iter))
-    # #     if os.path.exists(plabel_path):
-    # #         target_label_tmp = np.load(plabel_path)
-    # #         print('\n {} existing\n'.format(plabel_path))
-    # #     else:
-    # #         if prenc_i == nc_i:
-    # #             target_label.append(target_label_tmp)
-    # #             print_cluster_acc(label_dict, target_label_tmp)
-    # #             continue
-    # #
-    # #         # km = KMeans(n_clusters=nc_i, random_state=args.seed, n_jobs=args.n_jobs).fit(moving_avg_features)
-    # #         # target_label_tmp = np.asarray(km.labels_)
-    # #         # cluster_centers = np.asarray(km.cluster_centers_)
-    # #
-    # #         cluster = faiss.Kmeans(2048, nc_i, niter=300, verbose=True, gpu=True)
-    # #         cluster.train(moving_avg_features)
-    # #         _, labels = cluster.index.search(moving_avg_features, 1)
-    # #         target_label_tmp = labels.reshape(-1)
-    # #
-    # #     target_label.append(target_label_tmp)
-    # #     print_cluster_acc(label_dict, target_label_tmp)
-    # #     prenc_i = nc_i
-    # # new_dataset = dataset_target.train
-    #
-    # def compute_group_labels(features, num_clusters):
-    #     # 将特征转换为NumPy数组并连接起来
-    #     features_combined = features.detach().cpu().numpy()
-    #
-    #     # 使用K-means算法进行聚类
-    #     kmeans = KMeans(n_clusters=num_clusters)
-    #     kmeans.fit(features_combined)
-    #
-    #     # 获取每个特征所属的簇索引
-    #     labels = kmeans.labels_
-    #
-    #     # 将标签转换为PyTorch张量并放在CUDA上
-    #     group_labels = torch.from_numpy(labels).cuda()
-    #
-    #     # 计算每个特征样本与其所在类簇中心点特征的距离
-    #     cluster_centers = kmeans.cluster_centers_
-    #     # distances = np.linalg.norm(features_combined - cluster_centers[labels], axis=1)
-    #     # avg_distance = np.mean(distances)
-    #
-    #     # return group_labels, avg_distance
-    #     return group_labels, cluster_centers
-    #
-    # def euclidean_distance(tensor1, tensor2):
-    #     squared_diff = (tensor1 - tensor2) ** 2
-    #     sum_squared_diff = torch.sum(squared_diff, dim=1)
-    #     distance = torch.sqrt(sum_squared_diff)
-    #     return distance
-    #
-    # class DistanceLoss(nn.Module):
-    #     def __init__(self, cluster_features):
-    #         super(DistanceLoss, self).__init__()
-    #         self.cluster_features = cluster_features
-    #
-    #     def forward(self, inputs, pseudo_labels):
-    #         batch_centers = self.cluster_features[pseudo_labels]
-    #         loss = euclidean_distance(inputs, batch_centers)
-    #         batch_loss = torch.mean(loss)  # 计算批量数据上的平均距离
-    #         return batch_loss
+    proj_path = os.getcwd()
+    model_dir = proj_path + "/GRL_dir/models"
+    results_dir = proj_path +"/GRL_dir/results"
 
 
     for epoch in range(start_epoch, args.max_epoch):
         start_train_time = time.time()
-        # train(epoch, model, criterions, optimizer, trainloader, use_gpu)
-
-        # #clustering
-        # with torch.no_grad():
-        #     model.train()
-        #     print('==> Create pseudo labels for unlabeled data')
-        #     cluster_loader = get_test_loader(300, testset=sorted(t_dataset.train))
-        #
-        #
-        #     features1, _, _ = _feats_of_loader_nocc(
-        #         model,
-        #         cluster_loader,
-        #         feat_func=extract_feat_sampled_frames_whentrain,
-        #         use_gpu=use_gpu)
-        #     print_time("Extracted features for model set, obtained {} matrix".format(features1.shape))
-        #
-        #     features2, _, _ = _feats_of_loader_nocc(
-        #         ema_model,
-        #         cluster_loader,
-        #         feat_func=extract_feat_sampled_frames_whentrain,
-        #         use_gpu=use_gpu)
-        #     print_time("Extracted features for ema_model set, obtained {} matrix".format(features2.shape))
-        #
-        #     # features = torch.cat([features[f].unsqueeze(0) for f, _, _ in sorted(dataset.train)], 0)
-        #     # 将两个张量连接在一起
-        #     features = torch.cat((features1, features2), dim=0)
-        #     #
-        #     #
-        #     print(features.size())
-        #     # rerank_dist = compute_jaccard_distance(features, k1=30, k2=6)
-        #     # print(rerank_dist.shape)
-        #
-        #
-        #     # if epoch == 0:
-        #     #     # DBSCAN cluster
-        #     #     # eps = args.eps
-        #     #     # eps = 0.6
-        #     #     # print('Clustering criterion: eps: {:.3f}'.format(eps))
-        #     #     # cluster = DBSCAN(eps=eps, min_samples=4, metric='precomputed', n_jobs=-1)
-        #     #     cluster = KMeans(n_clusters=40)
-        #
-        #
-        #
-        #
-        #     # select & cluster images as training set of this epochs
-        #     # pseudo_labels = cluster.fit_predict(rerank_dist)
-        #     pseudo_labels, cluster_features = compute_group_labels(features,num_clusters=40)
-        #     print("cluster_features.shape:", cluster_features.shape)
-        #
-        #     num_cluster = 40
-        #     print(num_cluster)
-        #     print(pseudo_labels)
-        #
-        #     # # generate new dataset and calculate cluster centers
-        #     # @torch.no_grad()
-        #     # def generate_cluster_features(labels, features):
-        #     #     centers = collections.defaultdict(list)
-        #     #     for i, label in enumerate(labels):
-        #     #         if label == -1:
-        #     #             continue
-        #     #         centers[labels[i]].append(features[i])
-        #     #
-        #     #     centers = [
-        #     #         torch.stack(centers[idx], dim=0).mean(0) for idx in sorted(centers.keys())
-        #     #     ]
-        #     #
-        #     #     centers = torch.stack(centers, dim=0)
-        #     #     return centers
-        #     #
-        #     # cluster_features = generate_cluster_features(pseudo_labels, features).cuda()
-        #     # print("cluster_features.shape:",cluster_features.shape)
-        #     del cluster_loader, features
-        #
-        #
-        #     pseudo_labeled_dataset1 = []
-        #     for i, ((vids, _, cid), label) in enumerate(zip(sorted(t_dataset.train), pseudo_labels[:len(t_dataset.train)])):
-        #         # if label != -1:
-        #         pseudo_labeled_dataset1.append((vids, label.item(), cid))
-        #
-        #     pseudo_labeled_dataset2 = []
-        #     for i, ((vids, _, cid), label) in enumerate(
-        #             zip(sorted(t_dataset.train), pseudo_labels[len(t_dataset.train):])):
-        #         # if label != -1:
-        #         pseudo_labeled_dataset2.append((vids, label.item(), cid))
-        #
-        #     print('==> Statistics for epoch {}: {} clusters'.format(epoch, num_cluster))
-        #
-        #     new_t_train_loader1 = get_test_loader(batch_size=args.bS,testset=pseudo_labeled_dataset1)
-        #     new_t_train_loader2 = get_test_loader(batch_size=args.bS,testset=pseudo_labeled_dataset2)
-        #
-        #
-        # clu_loss = DistanceLoss(torch.from_numpy(cluster_features).cuda())
-        # trainer.clu_loss = clu_loss
-
-        # rank000 = test(model, queryloader_sampled_frames, galleryloader_sampled_frames, use_gpu)
-        # rank000 = test1(model, queryloader_sampled_frames, galleryloader_sampled_frames, use_gpu)
-        rank1 = test1(model, t_queryloader, t_galleryloader, use_gpu)
 
         trainer.train(ema_model,attn_para_model, attn_para_optimizer, st_model, model_dir, results_dir, device, args, epoch,
-                      model, optimizer,criterions, trainloader, t_trainloader, use_gpu)
-        # trainer.train(ema_model,attn_para_model, attn_para_optimizer, st_model, model_dir, results_dir, device, args, epoch,
-        #               model, optimizer,criterions, trainloader, t_trainloader,new_t_train_loader1, new_t_train_loader2, use_gpu)
+                      model, optimizer,criterions, trainloader, t_trainloader, source_num_classes, target_num_classes, use_gpu)
+
         train_time += round(time.time() - start_train_time)
         scheduler.step()
 
@@ -795,12 +393,13 @@ def main():
             print_time("==> Test")
             with torch.no_grad():
                 model.eval()
-                # rank000 = test1(model, queryloader_sampled_frames, galleryloader_sampled_frames, use_gpu)
-                rank1 = test1(model, t_queryloader, t_galleryloader, use_gpu)
-
+                if args.td in ['ccvid', 'rvccvid', 'svreid_cc', 'svreid', 'svreid_plus']:
+                    rank1 = test_cc(model, t_queryloader, t_galleryloader, use_gpu)
+                else:
+                    rank1 = test(model, t_queryloader, t_galleryloader, use_gpu)
 
             is_best = rank1 > best_rank1
-            if is_best: 
+            if is_best:
                 best_rank1 = rank1
                 best_epoch = epoch + 1
 
@@ -839,7 +438,10 @@ def main():
         print_time('==> Evaluate with all frames!')
         print_time("Loading checkpoint from '{}'".format(best_checkpoint_path))
         with torch.no_grad():
-            test(model, queryloader_all_frames, galleryloader_all_frames, use_gpu)
+            if args.td in ['ccvid', 'rvccvid', 'svreid_cc', 'svreid', 'svreid_plus']:
+                test_cc(model, t_queryloader, t_galleryloader, use_gpu)
+            else:
+                test(model, t_queryloader, t_galleryloader, use_gpu)
         return
 
 
@@ -1009,7 +611,7 @@ def test(model, queryloader, galleryloader, use_gpu, ranks=[1, 5, 10, 20]):
 
     return cmc[0]
 
-def test1(model, queryloader, galleryloader, use_gpu, ranks=[1, 5, 10, 20]):
+def test_cc(model, queryloader, galleryloader, use_gpu, ranks=[1, 5, 10, 20]):
     since = time.time()
     model.eval()
 
@@ -1031,26 +633,6 @@ def test1(model, queryloader, galleryloader, use_gpu, ranks=[1, 5, 10, 20]):
         feat_func,
         use_gpu=use_gpu)
     print_time("Extracted features for gallery set, obtained {} matrix".format(gf.shape))
-
-    # print(q_camids)
-    # print(g_camids)
-    #
-    # PATH1 = 'extract_features_rvccvid/query/'
-    # PATH2 = 'extract_features_rvccvid/gallery/'
-    # np.save('{}qf.npy'.format(PATH1),qf.cpu().numpy())
-    # np.save('{}q_pids.npy'.format(PATH1),q_pids)
-    # np.save('{}q_camids.npy'.format(PATH1),q_camids)
-    # np.save('{}q_clothes_ids.npy'.format(PATH1),q_clothes_ids)
-    #
-    #
-    # np.save('{}gf.npy'.format(PATH2), gf.cpu().numpy())
-    # np.save('{}g_pids.npy'.format(PATH2), g_pids)
-    # np.save('{}g_camids.npy'.format(PATH2), g_camids)
-    # np.save('{}g_clothes_ids.npy'.format(PATH2), g_clothes_ids)
-
-
-
-
     time_elapsed = time.time() - since
     print_time('Extracting features complete in {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
 
@@ -1098,7 +680,6 @@ def test1(model, queryloader, galleryloader, use_gpu, ranks=[1, 5, 10, 20]):
     print("-----------------------------------------------------------")
 
     return cmc[0]
-
 
 if __name__ == '__main__':
     specific_params(args)

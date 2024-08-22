@@ -1,4 +1,3 @@
-
 import torch
 import torch.nn as nn
 from torch.autograd import Function
@@ -8,9 +7,6 @@ import math
 from torch.nn import init
 import numpy as np
 
-from .centroid import Centroid
-from itertools import permutations
-from itertools import combinations
 
 def weights_init_kaiming(m):
     classname = m.__class__.__name__
@@ -134,107 +130,6 @@ class attn_para(nn.Module):
 
         return loss
 
-'''
-
-# class MultiLossLayer(nn.Module):
-#     def __init__(self):
-#         super(MultiLossLayer, self).__init__()
-#         def get_rand():
-#             return torch.tensor(0.8 * np.random.random() + 0.2)
-#         self.threshold = torch.tensor(0.05).cuda()
-#         # self.loss = SupConLoss(temperature=0.1)
-#         self._sigmas_sq = nn.ParameterList([nn.Parameter(get_rand())] * 3)
-#
-#     def forward(self, y1, y2):
-#         # intra loss
-#         ys = [y2]
-#
-#         # a = self.loss(y1)
-#         a = y1
-#         if self._sigmas_sq[0] < self.threshold:
-#             loss = a / (self._sigmas_sq[0] * 2) + torch.log(self._sigmas_sq[0])
-#         else:
-#             loss = a / (self.threshold * 2)
-#         for i, y in enumerate(ys):
-#             # b = self.loss(y)
-#             b = y2
-#             if self._sigmas_sq[i] < self.threshold:
-#                 loss += b / (self._sigmas_sq[i] * 2) + torch.log(self._sigmas_sq[i])
-#             else:
-#                 loss += b / (self.threshold * 2)
-#         return loss, a, b
-
-
-class attn_para00(nn.Module):
-    def __init__(self):
-        super(attn_para00, self).__init__()
-        self.attn_para1 =  nn.Parameter(torch.FloatTensor([0,-0.45]))
-
-    def forward(self,x,y):
-        loss = x * torch.exp(self.attn_para1[0]) + y * torch.exp(self.attn_para1[1])
-
-        return loss
-
-def sigmoid_rampup(current, rampup_length):
-    """Exponential rampup from https://arxiv.org/abs/1610.02242"""
-    if rampup_length == 0:
-        return 1.0
-    else:
-        current = np.clip(current, 0.0, rampup_length)
-        phase = 1.0 - current / rampup_length
-        return float(np.exp(-5.0 * phase * phase))
-
-def get_current_consistency_weight(epoch):
-    # Consistency ramp-up from https://arxiv.org/abs/1610.02242
-    return 1.0 * sigmoid_rampup(epoch, 200.0)
-
-class attn_para3(nn.Module):
-    def __init__(self):
-        super(attn_para3, self).__init__()
-        self.attn_para1 = nn.Parameter(torch.FloatTensor([0, -0.95, -2.3]))
-        self.attn_weights = nn.Parameter(torch.ones(3))
-
-    def forward(self, x, y, z, epoch):
-        attn_exp = torch.exp(self.attn_weights)
-        attn_exp_sum = attn_exp.sum()
-
-        # 计算注意力加权的任务损失
-        loss = (x * torch.exp(self.attn_para1[0]) +
-                y * torch.exp(self.attn_para1[1]) +
-                z * torch.exp(self.attn_para1[2])) * attn_exp / attn_exp_sum
-
-        # 计算当前一致性权重
-        consistency_weight = get_current_consistency_weight(epoch)
-
-        # 根据一致性权重对 y 和 z 任务的损失进行缩放
-        loss[1] *= consistency_weight
-        loss[2] *= consistency_weight
-
-        return loss
-
-class attn_para2(nn.Module):
-    def __init__(self):
-        super(attn_para2, self).__init__()
-        self.attn_para1 = nn.Parameter(torch.FloatTensor([0, -0.95]))
-        self.attn_weights = nn.Parameter(torch.ones(2))
-
-    def forward(self, x, y, epoch):
-        attn_exp = torch.exp(self.attn_weights)
-        attn_exp_sum = attn_exp.sum()
-
-        # 计算注意力加权的任务损失
-        loss = (x * torch.exp(self.attn_para1[0]) +
-                y * torch.exp(self.attn_para1[1]) ) * attn_exp / attn_exp_sum
-
-        # # 计算当前一致性权重
-        # consistency_weight = get_current_consistency_weight(epoch)
-        #
-        # # 根据一致性权重对 y 和 z 任务的损失进行缩放
-        # loss[1] *= consistency_weight
-
-        return loss
-'''
-
 # definition of Gradient Reversal Layer
 class GradRevLayer(Function):
     @staticmethod
@@ -348,25 +243,6 @@ class MultiStageModel(nn.Module):
         # out = out.unsqueeze(1)  # (batch, 1, 2)
 
         return out
-
-
-
-        # self.bn = nn.BatchNorm1d(64)
-        # self.bn.apply(weights_init_kaiming)
-
-        # if 'rev_grad' in self.DA_adv_video and self.use_target != 'none': #有
-        #     num_domain_class = 2
-        #     num_concat = 1
-        #     if 'rev_grad_ssl' in self.DA_adv_video:
-        #         num_domain_class = int(math.factorial(self.num_seg*2)/(math.factorial(self.num_seg)**2))
-        #
-        #         num_concat = self.num_seg * 2
-        #
-        #     self.ad_net_video_base = nn.ModuleList()
-        #     self.ad_net_video_base += [AdvDomainClsBase(num_f_maps * num_concat, num_f_maps, 'video', args)]
-        #     self.ad_net_video_cls = nn.ModuleList()
-        #     self.ad_net_video_cls += [nn.Linear(num_f_maps, num_domain_class)]
-
 
 
     def forward(self, x_s, x_t, mask_s, mask_t, beta, reverse):

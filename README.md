@@ -2,32 +2,24 @@
 
 This document provides instructions on how to use the codebase for video-based person re-identification.
 
-### Getting Started
+### Requirements: Python=3.7 and Pytorch=1.8.1
 
-#### UDA Video ReID (Unsupervised Domain Adaptation)
+### Data preparation
+Download the dataset from this link [**SVReID**](https://drive.google.com/file/d/12LCms0nW0ipUmDEk2Xg8t8GmiGFLysew/view?usp=sharing).
+
+### Getting Started
 
 To train the model for unsupervised domain adaptation:
 
 ```shell
 # Train
 python main_SSA.py \
+    --dataset ${SVReID, SVReID_CC, SVReID_plus, mars, ...} \
     --root ${path of source dataset} \
-    --td ilidsvid \
+    --td ${ilidsvid, ccvid, ...} \
+    --tdroot ${path of target dataset} \
     --save_dir ${path for saving logs} \
     --gpu_devices 0,1,2,3
-```
-
-#### Cross-Domain Video ReID Baseline
-
-To train the baseline model for cross-domain video re-identification:
-
-```shell
-# Train
-python main.py \
-    --dataset ${mars, lsvid, ...} \
-    --root ${path of dataset} \
-    --gpu_devices 0,1,2,3 \
-    --save_dir ${path for saving models and logs}
 ```
 
 To test the trained model using all frames:
@@ -35,15 +27,20 @@ To test the trained model using all frames:
 ```shell
 # Test with all frames
 python main.py \
-    --dataset mars \
-    --root ${path of dataset} \
-    --gpu_devices 0,1,2,3 \
+    --dataset ${SVReID, SVReID_CC, SVReID_plus, mars, ...} \
+    --root ${path of source dataset} \
+    --td ${ilidsvid, ccvid, ...} \
+    --tdroot ${path of target dataset} \
     --save_dir ${path for saving logs} \
     --evaluate \
-    --all_frames \
-    --resume ${path of pretrained model}
+    --resume ${path of trained model}
+    --gpu_devices 0,1,2,3 \
 ```
 
 ---
 
 Please make sure to replace `${...}` placeholders with the actual paths and configurations relevant to your setup.
+
+### Acknowledgments
+
+This code is based on the implementations of [**SINet**](https://github.com/baist/SINet).
