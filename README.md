@@ -40,7 +40,3 @@ python main.py \
 ---
 
 Please make sure to replace `${...}` placeholders with the actual paths and configurations relevant to your setup.
-
-### Acknowledgments
-
-This code is based on the implementations of [**SINet**](https://github.com/baist/SINet).
