@@ -14,7 +14,7 @@ To train the model for unsupervised domain adaptation:
 ```shell
 # Train
 python main_SSA.py \
-    --dataset ${SVReID, SVReID_CC, SVReID_plus, mars, ...} \
+    --dataset ${svreid, svreid_cc, svreid_plus, mars, ...} \
     --root ${path of source dataset} \
     --td ${ilidsvid, ccvid, ...} \
     --tdroot ${path of target dataset} \
@@ -27,7 +27,7 @@ To test the trained model using all frames:
 ```shell
 # Test with all frames
 python main.py \
-    --dataset ${SVReID, SVReID_CC, SVReID_plus, mars, ...} \
+    --dataset ${svreid, svreid_cc, svreid_plus, mars, ...} \
     --root ${path of source dataset} \
     --td ${ilidsvid, ccvid, ...} \
     --tdroot ${path of target dataset} \
