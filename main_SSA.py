@@ -39,11 +39,11 @@ eeeepoch = 150 # epoch
 
 parser = argparse.ArgumentParser(description='Train video model')
 # Datasets
-parser.add_argument('-d', '--dataset', type=str, default='v3dgait',
+parser.add_argument('-d', '--dataset', type=str, default='svreid',
                     choices=data_manager.get_names())
-parser.add_argument('--root', type=str, default='/HDD3/zxq')
-parser.add_argument('--td', type=str, default='ccvid') #目标域数据集
-parser.add_argument('--tdroot', type=str, default='/HDD3/zxq/') #目标域数据集地址
+parser.add_argument('--root', type=str, default='/HDD3/zxq/new_dataset_path')
+parser.add_argument('--td', type=str, default='ilidsvid') #目标域数据集
+parser.add_argument('--tdroot', type=str, default='/HDD3/zxq/iLIDS-VID') #目标域数据集地址
 parser.add_argument('-j', '--workers', default=4, type=int,
                     help="number of data loading workers (default: 4)")
 parser.add_argument('--height', type=int, default=256,
@@ -192,7 +192,7 @@ def main():
     elif args.all_frames:
         sys.stdout = Logger(osp.join(args.save_dir, 'log_eval_all_frames.log'))
     else:
-        sys.stdout = Logger(osp.join(args.save_dir, 'log_eval_sampled_frames.log'))
+        sys.stdout = Logger(osp.join(args.save_dir, 'log_eval_.log'))
 
     print_time("============ Initialized logger ============")
     print("\n".join("\t\t%s: %s" % (k, str(v)) for k, v in sorted(dict(vars(args)).items())))

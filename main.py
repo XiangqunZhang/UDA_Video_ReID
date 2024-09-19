@@ -28,11 +28,11 @@ from utils.video_loader import ImageDataset, VideoDataset, VideoDatasetcc
 
 parser = argparse.ArgumentParser(description='Train video model')
 # Datasets
-parser.add_argument('-d', '--dataset', type=str, default='v3dgait',
+parser.add_argument('-d', '--dataset', type=str, default='SVReID',
                     choices=data_manager.get_names())
-parser.add_argument('--root', type=str, default='/HDD3/zxq')
-parser.add_argument('--td', type=str, default='ccvid') #目标域数据集
-parser.add_argument('--tdroot', type=str, default='/HDD3/zxq/') #目标域数据集地址
+parser.add_argument('--root', type=str, default='/HDD3/zxq/new_dataset_path')
+parser.add_argument('--td', type=str, default='ilidsvid') #目标域数据集
+parser.add_argument('--tdroot', type=str, default='/HDD3/zxq/iLIDS-VID') #目标域数据集地址
 parser.add_argument('-j', '--workers', default=4, type=int,
                     help="number of data loading workers (default: 4)")
 parser.add_argument('--height', type=int, default=256,
@@ -107,7 +107,7 @@ def main():
     elif args.all_frames:
         sys.stdout = Logger(osp.join(args.save_dir, 'log_eval_all_frames.log'))
     else:
-        sys.stdout = Logger(osp.join(args.save_dir, 'log_eval_sampled_frames.log'))
+        sys.stdout = Logger(osp.join(args.save_dir, 'log_eval_.log'))
 
     print_time("============ Initialized logger ============")
     print("\n".join("\t\t%s: %s" % (k, str(v)) for k, v in sorted(dict(vars(args)).items())))
@@ -155,13 +155,13 @@ def main():
     temporal_transform_test = TT.TemporalRestrictedBeginCrop(size=args.seq_len)
 
     dataset_train = dataset.train
-    dataset_query = dataset.query
-    dataset_gallery = dataset.gallery
+    # dataset_query = dataset.query
+    # dataset_gallery = dataset.gallery
 
     pin_memory = True if use_gpu else False
 
     def get_train_dataloader(dataset_name, dataset_train):
-        if dataset_name in ['v3dgait','ccvid','rvccvid']: #cc reid
+        if dataset_name in ['svreid_cc', 'svreid', 'svreid_plus','ccvid','rvccvid']: #cc reid
             dataset = VideoDatasetcc(dataset_train, spatial_transform=spatial_transform_train, temporal_transform=temporal_transform_train)
             sampler=RandomIdentitySampler_vccvid(dataset_train, num_instances=args.num_instances)
         else:
@@ -180,7 +180,7 @@ def main():
         return dataloader
 
     def get_qg_dataloader(dataset_name, dataset_qg):
-        if dataset_name in ['v3dgait','ccvid','rvccvid', 'svreid_cc']: #cc reid
+        if dataset_name in ['v3dgait','ccvid','rvccvid', 'svreid_cc', 'svreid', 'svreid_plus']: #cc reid
             dataset = VideoDatasetcc(dataset_qg, spatial_transform=spatial_transform_test, temporal_transform=temporal_transform_test)
         else:
             dataset = VideoDataset(dataset_qg, spatial_transform=spatial_transform_test, temporal_transform=temporal_transform_test)
@@ -251,8 +251,11 @@ def main():
 
     if args.evaluate:
         with torch.no_grad():
-            print_time('==> Evaluate with all frames!')
-            test(model, t_queryloader, t_galleryloader, use_gpu)
+            print_time('==> Evaluate the pretrained model!')
+            if args.td in ['v3dgait', 'ccvid', 'rvccvid', 'svreid_cc']:  # cc reid
+                test1(model, t_queryloader, t_galleryloader, use_gpu)
+            else:
+                test(model, t_queryloader, t_galleryloader, use_gpu)
         return
 
     start_time = time.time()

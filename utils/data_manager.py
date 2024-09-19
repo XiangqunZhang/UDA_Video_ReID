@@ -685,9 +685,9 @@ class PRID(object):
 
         self.root = root
         self.dataset_url = 'https://files.icg.tugraz.at/f/6ab7e8ce8f/?raw=1'
-        self.split_path = osp.join(root, 'splits_prid2011.json')
-        self.cam_a_path = osp.join(root, 'multi_shot', 'cam_a')
-        self.cam_b_path = osp.join(root, 'multi_shot', 'cam_b')
+        self.split_path = osp.join(self.root, 'splits_prid2011.json')
+        self.cam_a_path = osp.join(self.root, 'prid_2011', 'multi_shot', 'cam_a')
+        self.cam_b_path = osp.join(self.root, 'prid_2011', 'multi_shot', 'cam_b')
 
         self._check_before_run()
         splits = read_json(self.split_path)
@@ -1305,7 +1305,8 @@ class SVReID(object):
 
     def __init__(self, root='/data/datasets/', sampling_step=64, seq_len=16, stride=4, **kwargs):
 
-        self.root = osp.join(root, 'SVReID')
+        # self.root = osp.join(root, 'SVReID')
+        self.root = osp.join(root, 'V3DGait_VIS')
         # print(self.root)
         self.train_path = osp.join(self.root, 'train_svreid.txt')
         self.query_path = osp.join(self.root, 'query.txt')
